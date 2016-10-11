@@ -396,9 +396,11 @@ double findTotalTurnAngle(const RouteStep &entry_step, const RouteStep &exit_ste
     const auto exit_angle = turn_angle(exit_step_entry_bearing, exit_step_exit_bearing);
     const auto entry_angle = turn_angle(entry_step_entry_bearing, entry_step_exit_bearing);
 
+    const double total_angle = turn_angle(entry_step_entry_bearing, exit_step_exit_bearing);
     // We allow for minor deviations from a straight line
-    if ((entry_step.distance < MAX_COLLAPSE_DISTANCE && exit_step.intersections.size() == 1) ||
-        (entry_angle <= 185 && exit_angle <= 185) || (entry_angle >= 175 && exit_angle >= 175))
+    if (((entry_step.distance < MAX_COLLAPSE_DISTANCE && exit_step.intersections.size() == 1) ||
+         (entry_angle <= 185 && exit_angle <= 185) || (entry_angle >= 175 && exit_angle >= 175)) &&
+        angularDeviation(total_angle, 180) > 20)
     {
         // both angles are in the same direction, the total turn gets increased
         //
@@ -414,7 +416,6 @@ double findTotalTurnAngle(const RouteStep &entry_step, const RouteStep &exit_ste
         //        c
         //        |
         //        d
-        const double total_angle = turn_angle(entry_step_entry_bearing, exit_step_exit_bearing);
         return total_angle;
     }
     else
@@ -487,6 +488,7 @@ void collapseTurnAt(std::vector<RouteStep> &steps,
                     const std::size_t one_back_index,
                     const std::size_t step_index)
 {
+    std::cout << "Collapse Turn at: " << step_index << std::endl;
     BOOST_ASSERT(step_index < steps.size());
     BOOST_ASSERT(one_back_index < steps.size());
     const auto &current_step = steps[step_index];
@@ -498,31 +500,67 @@ void collapseTurnAt(std::vector<RouteStep> &steps,
     if (!hasManeuver(one_back_step, current_step))
         return;
 
-    // Very Short New Name
-    if (((collapsable(one_back_step, current_step) ||
-          (isCollapsableInstruction(one_back_step.maneuver.instruction) &&
-           choiceless(current_step, one_back_step))) &&
-         !(one_back_step.maneuver.instruction.type == TurnType::Merge)))
-    // the check against merge is a workaround for motorways
-    {
-        BOOST_ASSERT(two_back_index < steps.size());
-        if (isUTurn(one_back_step, current_step, steps[two_back_index]))
-            collapseUTurn(steps, two_back_index, one_back_index, step_index);
-        else if (compatible(one_back_step, steps[two_back_index]))
+    // A maneuver is preceded by a name change if the instruction just before can be collapsed
+    // normally or the instruction itself is collapsable and does not actually present a choice
+    const auto maneuverPrecededByNameChange = [](const RouteStep &turning_point,
+                                                 const RouteStep &possible_name_change_location,
+                                                 const RouteStep &preceeding_step) {
+        // the check against merge is a workaround for motorways
+        if (possible_name_change_location.maneuver.instruction.type == TurnType::Merge ||
+            !compatible(possible_name_change_location, preceeding_step))
+            return false;
+
+        return collapsable(possible_name_change_location, turning_point) ||
+               (isCollapsableInstruction(possible_name_change_location.maneuver.instruction) &&
+                choiceless(possible_name_change_location, preceeding_step));
+    };
+
+    // check if the actual turn we wan't to announce is delayed. This situation describes a turn
+    // that is expressed by two turns,
+    const auto isDelayedTurn = [](const RouteStep &openining_turn,
+                                  const RouteStep &finishing_turn) {
+        // only possible if both are compatible
+        if (!compatible(openining_turn, finishing_turn))
+            return false;
+        else
         {
-            BOOST_ASSERT(!one_back_step.intersections.empty());
+            const auto is_short_and_collapsable =
+                openining_turn.distance <= MAX_COLLAPSE_DISTANCE &&
+                isCollapsableInstruction(finishing_turn.maneuver.instruction);
+
+            const auto is_not_too_long_and_choiceless =
+                openining_turn.distance <= 2 * MAX_COLLAPSE_DISTANCE &&
+                choiceless(finishing_turn, openining_turn);
+
+            return is_short_and_collapsable || is_not_too_long_and_choiceless ||
+                   isLinkroad(openining_turn);
+        }
+    };
+
+    // Handle possible u-turns
+    if (isUTurn(one_back_step, current_step, steps[two_back_index]))
+        collapseUTurn(steps, two_back_index, one_back_index, step_index);
+    // Very Short New Name that will be suppressed. Turn location remains at current_step
+    else if (maneuverPrecededByNameChange(current_step, one_back_step, steps[two_back_index]))
+    {
+        std::cout << "Name Change" << std::endl;
+        BOOST_ASSERT(two_back_index < steps.size());
+        BOOST_ASSERT(!one_back_step.intersections.empty());
+        if (TurnType::Merge == current_step.maneuver.instruction.type)
+        {
+            steps[step_index].maneuver.instruction.direction_modifier =
+                util::guidance::mirrorDirectionModifier(
+                    steps[step_index].maneuver.instruction.direction_modifier);
+            steps[step_index].maneuver.instruction.type = TurnType::Turn;
+        }
+        else
+        {
             if (TurnType::Continue == current_step.maneuver.instruction.type ||
                 (TurnType::Suppressed == current_step.maneuver.instruction.type &&
                  current_step.maneuver.instruction.direction_modifier !=
                      DirectionModifier::Straight))
                 steps[step_index].maneuver.instruction.type = TurnType::Turn;
-            else if (TurnType::Merge == current_step.maneuver.instruction.type)
-            {
-                steps[step_index].maneuver.instruction.direction_modifier =
-                    util::guidance::mirrorDirectionModifier(
-                        steps[step_index].maneuver.instruction.direction_modifier);
-                steps[step_index].maneuver.instruction.type = TurnType::Turn;
-            }
+
             else if (TurnType::NewName == current_step.maneuver.instruction.type &&
                      current_step.maneuver.instruction.direction_modifier !=
                          DirectionModifier::Straight &&
@@ -534,25 +572,20 @@ void collapseTurnAt(std::vector<RouteStep> &steps,
                      one_back_step.intersections.front().bearings.size() > 2)
                 steps[step_index].maneuver.instruction.type = TurnType::Turn;
 
-            if (TurnType::Merge != current_step.maneuver.instruction.type)
-            {
-                const auto total_angle = findTotalTurnAngle(steps[one_back_index], current_step);
-                steps[step_index].maneuver.instruction.direction_modifier =
-                    getTurnDirection(total_angle);
-            }
-
-            steps[two_back_index] = elongate(std::move(steps[two_back_index]), one_back_step);
-            // If the previous instruction asked to continue, the name change will have to
-            // be changed into a turn
-            invalidateStep(steps[one_back_index]);
+            const auto total_angle = findTotalTurnAngle(steps[one_back_index], current_step);
+            steps[step_index].maneuver.instruction.direction_modifier =
+                getTurnDirection(total_angle);
         }
+
+        steps[two_back_index] = elongate(std::move(steps[two_back_index]), one_back_step);
+        // If the previous instruction asked to continue, the name change will have to
+        // be changed into a turn
+        invalidateStep(steps[one_back_index]);
     }
-    // very short segment after turn
-    else if (((one_back_step.distance <= MAX_COLLAPSE_DISTANCE &&
-               isCollapsableInstruction(current_step.maneuver.instruction)) ||
-              isLinkroad(one_back_step)) &&
-             compatible(one_back_step, current_step))
+    // very short segment after turn, turn location remains at one_back_step
+    else if (isDelayedTurn(one_back_step, current_step))
     {
+        std::cout << "Delayed turn" << std::endl;
         steps[one_back_index] = elongate(std::move(steps[one_back_index]), steps[step_index]);
         // TODO check for lanes (https://github.com/Project-OSRM/osrm-backend/issues/2553)
         if (TurnType::Continue == one_back_step.maneuver.instruction.type &&
@@ -578,8 +611,9 @@ void collapseTurnAt(std::vector<RouteStep> &steps,
             }
             forwardStepSignage(steps[one_back_index], current_step);
         }
-        else if (TurnType::NewName == current_step.maneuver.instruction.type &&
-                 steps[one_back_index].maneuver.instruction.type == TurnType::Suppressed)
+        else if (TurnType::NewName == one_back_step.maneuver.instruction.type ||
+                 (TurnType::NewName == current_step.maneuver.instruction.type &&
+                  steps[one_back_index].maneuver.instruction.type == TurnType::Suppressed))
             steps[one_back_index].maneuver.instruction.type = TurnType::Turn;
 
         if (TurnType::Merge == one_back_step.maneuver.instruction.type &&
@@ -595,6 +629,7 @@ void collapseTurnAt(std::vector<RouteStep> &steps,
         // on non merge-types, we check for a combined turn angle
         else if (TurnType::Merge != one_back_step.maneuver.instruction.type)
         {
+            std::cout << "Getting Turn Angle" << std::endl;
             const auto combined_angle = findTotalTurnAngle(one_back_step, current_step);
             steps[one_back_index].maneuver.instruction.direction_modifier =
                 getTurnDirection(combined_angle);
@@ -603,11 +638,6 @@ void collapseTurnAt(std::vector<RouteStep> &steps,
         steps[one_back_index].name = current_step.name;
         steps[one_back_index].name_id = current_step.name_id;
         invalidateStep(steps[step_index]);
-    }
-    // Potential U-Turn
-    else if (isUTurn(one_back_step, current_step, steps[two_back_index]))
-    {
-        collapseUTurn(steps, two_back_index, one_back_index, step_index);
     }
     else if (TurnType::Suppressed == current_step.maneuver.instruction.type &&
              !isNoticeableNameChange(one_back_step, current_step))
@@ -625,20 +655,6 @@ void collapseTurnAt(std::vector<RouteStep> &steps,
         // turning onto a ramp makes the first turn into a ramp
         steps[one_back_index] = elongate(std::move(steps[one_back_index]), current_step);
         steps[one_back_index].maneuver.instruction.type = TurnType::OnRamp;
-        const auto angle = findTotalTurnAngle(one_back_step, current_step);
-        steps[one_back_index].maneuver.instruction.direction_modifier =
-            ::osrm::util::guidance::getTurnDirection(angle);
-
-        forwardStepSignage(steps[one_back_index], current_step);
-        invalidateStep(steps[step_index]);
-    }
-    else if (TurnType::Continue == one_back_step.maneuver.instruction.type &&
-             choiceless(current_step, one_back_step) &&
-             current_step.maneuver.instruction.type == TurnType::Turn)
-    {
-        // Delayed turn
-        steps[one_back_index] = elongate(std::move(steps[one_back_index]), current_step);
-        steps[one_back_index].maneuver.instruction.type = TurnType::Turn;
         const auto angle = findTotalTurnAngle(one_back_step, current_step);
         steps[one_back_index].maneuver.instruction.direction_modifier =
             ::osrm::util::guidance::getTurnDirection(angle);
@@ -971,7 +987,7 @@ std::vector<RouteStep> collapseTurns(std::vector<RouteStep> steps)
                 }
                 else
                 {
-                    //the sliproad turn is incompatible. So we handle it as a turn
+                    // the sliproad turn is incompatible. So we handle it as a turn
                     steps[one_back_index].maneuver.instruction.type = TurnType::Turn;
                 }
             }

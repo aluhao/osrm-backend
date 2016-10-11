@@ -901,10 +901,10 @@ Feature: Turn Lane Guidance
         Given the node map
             """
                 f   e
-
-
-                    c
-            a   b
+                |   |
+                |   |
+                |   c
+            a - b ' |
                 g   d
             """
 
@@ -1094,11 +1094,13 @@ Feature: Turn Lane Guidance
 
     Scenario: Reverse Not Allowed
         Given the node map
-            |   |   |   |   |   |   | n | o |   |
-            | f |   |   | e |   |   | g | j | m |
-            |   |   |   |   | d |   |   |   |   |
-            | a |   | 1 | b |   |   | c | i | l |
-            |   |   |   |   |   |   | h | k |   |
+            """
+                        n o
+            f - - e\- - g-j-m
+                    d   | |
+            a - 1 b/- - c-i-l
+                        h k
+            """
 
         And the ways
             | nodes | name | highway        | oneway | turn:lanes:forward   |
