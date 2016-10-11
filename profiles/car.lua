@@ -590,8 +590,12 @@ function way_function (way, result)
   -- Scaling speed to take average waiting time into account plus some more for start / stop.
   if oneway and "alternating" == oneway then
     local scaling_factor = 0.4
-    result.forward_speed = result.forward_speed * scaling_factor
-    result.backward_speed = result.backward_speed * scaling_factor
+    if result.forward_speed ~= math.huge then
+      result.forward_speed = result.forward_speed * scaling_factor
+    end
+    if result.backward_speed ~= math.huge then
+      result.backward_speed = result.backward_speed * scaling_factor
+    end
   end
 
   -- only allow this road as start point if it not a ferry
