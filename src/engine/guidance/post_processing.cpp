@@ -524,6 +524,11 @@ void collapseTurnAt(std::vector<RouteStep> &steps,
             return false;
         else
         {
+            const auto hasRampType = [](const RouteStep &step) {
+                return step.maneuver.instruction.type == TurnType::OffRamp ||
+                       step.maneuver.instruction.type == TurnType::OnRamp;
+            };
+
             const auto is_short_and_collapsable =
                 openining_turn.distance <= MAX_COLLAPSE_DISTANCE &&
                 isCollapsableInstruction(finishing_turn.maneuver.instruction);
@@ -531,9 +536,9 @@ void collapseTurnAt(std::vector<RouteStep> &steps,
             const auto is_not_too_long_and_choiceless =
                 openining_turn.distance <= 2 * MAX_COLLAPSE_DISTANCE &&
                 choiceless(finishing_turn, openining_turn);
-
-            return is_short_and_collapsable || is_not_too_long_and_choiceless ||
-                   isLinkroad(openining_turn);
+            return !hasRampType(openining_turn) &&
+                   (is_short_and_collapsable || is_not_too_long_and_choiceless ||
+                    isLinkroad(openining_turn));
         }
     };
 
