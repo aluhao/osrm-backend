@@ -326,7 +326,7 @@ CoordinateExtractor::GetCoordinatesAlongRoad(const NodeID intersection_node,
         // the compressed edges contain node ids, we transfer them to coordinates accessing the
         // node_coordinates array
         const auto compressedGeometryToCoordinate = [this](
-            const CompressedEdgeContainer::CompressedEdge &compressed_edge) -> util::Coordinate {
+            const CompressedEdgeContainer::OnewayCompressedEdge &compressed_edge) -> util::Coordinate {
             return node_coordinates[compressed_edge.node_id];
         };
 
